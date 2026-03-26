@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { ITEMS } from './items'
 import PrintReceiptModal, { type ReceiptLine } from '../../components/PrintReceiptModal'
 import { useAdminStore } from '../../store/adminStore'
+import type { PaymentInfo } from '../../components/MpesaCheckout'
 
 export interface DispenseItem { id: string; name: string; quantity: number; price: number }
 
@@ -106,7 +107,17 @@ function Burst({ active }: { active: boolean }) {
 }
 
 // ── Receipt builder ─────────────────────────────────────────────────────────
-function buildReceipt(items: DispenseItem[], taxRate: number): ReceiptLine[] {
+function paymentLabel(info?: PaymentInfo): string {
+  if (!info) return 'M-Pesa STK'
+  if (info.method === 'card') return `${info.cardType} ···· ${info.last4}`
+  const ph = info.phone
+  const fmt10 = ph.length >= 9
+    ? `+254 ${ph.slice(0,3)} ${ph.slice(3,6)} ${ph.slice(6,9)}`
+    : `+254 ${ph}`
+  return `M-Pesa · ${fmt10}`
+}
+
+function buildReceipt(items: DispenseItem[], taxRate: number, info?: PaymentInfo): ReceiptLine[] {
   const lines: ReceiptLine[] = []
   let subtotal = 0
 
@@ -129,15 +140,15 @@ function buildReceipt(items: DispenseItem[], taxRate: number): ReceiptLine[] {
 
   const total = subtotal + taxAmount
   lines.push({ label: 'TOTAL', value: fmt(total), highlight: true })
-  lines.push({ label: 'Payment', value: 'M-Pesa STK', highlight: true })
+  lines.push({ label: 'Payment', value: paymentLabel(info), highlight: true })
 
   return lines
 }
 
 // ── Main component ──────────────────────────────────────────────────────────
-interface Props { items: DispenseItem[]; onAllDone?: () => void }
+interface Props { items: DispenseItem[]; paymentInfo?: PaymentInfo; onAllDone?: () => void }
 
-export default function VendingDispensing({ items, onAllDone }: Props) {
+export default function VendingDispensing({ items, paymentInfo, onAllDone }: Props) {
   const navigate      = useNavigate()
   const taxRate       = useAdminStore(s => s.appSettings.vendingTaxRate)
   const [idx, setIdx] = useState(0)
@@ -361,7 +372,7 @@ export default function VendingDispensing({ items, onAllDone }: Props) {
         {showReceipt && (
           <PrintReceiptModal
             title="Vending Receipt"
-            lines={buildReceipt(items, taxRate)}
+            lines={buildReceipt(items, taxRate, paymentInfo)}
             onDone={() => { setShowReceipt(false); navigate('/') }}
           />
         )}

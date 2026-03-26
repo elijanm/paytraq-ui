@@ -4,7 +4,7 @@ import { ShoppingCart, ShieldAlert } from 'lucide-react'
 import BackButton from '../../components/BackButton'
 import CartDrawer from './CartDrawer'
 import AgeVerification from './AgeVerification'
-import MpesaCheckout from '../../components/MpesaCheckout'
+import MpesaCheckout, { type PaymentInfo } from '../../components/MpesaCheckout'
 import VendingDispensing, { type DispenseItem } from './VendingDispensing'
 import { useCartStore } from '../../store/cartStore'
 import { ITEMS } from './items'
@@ -21,16 +21,18 @@ export default function Vending() {
   const [cartOpen, setCartOpen]       = useState(false)
   const [view, setView]               = useState<View>('shop')
   const [dispenseList, setDispenseList] = useState<DispenseItem[]>([])
+  const [paymentInfo, setPaymentInfo]  = useState<PaymentInfo | undefined>()
   const { items, addItem, updateQty, totalItems, total, clearCart } = useCartStore()
 
   const getQty = (id: string) => items.find(i => i.id === id)?.quantity ?? 0
 
-  const handleCheckoutSuccess = () => {
+  const handleCheckoutSuccess = (info: PaymentInfo) => {
     // Snapshot cart BEFORE clearing so dispensing screen can show each item
     const snapshot: DispenseItem[] = items.map(ci => ({
       id: ci.id, name: ci.name, quantity: ci.quantity, price: ci.price,
     }))
     setDispenseList(snapshot)
+    setPaymentInfo(info)
     clearCart()
     setView('dispensing')
   }
@@ -42,7 +44,7 @@ export default function Vending() {
     setView(needsVerify ? 'age_verify' : 'checkout')
   }
 
-  if (view === 'dispensing') return <VendingDispensing items={dispenseList} />
+  if (view === 'dispensing') return <VendingDispensing items={dispenseList} paymentInfo={paymentInfo} />
 
   return (
     <motion.div

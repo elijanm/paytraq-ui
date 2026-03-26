@@ -10,11 +10,14 @@ export interface Transaction {
   status: 'success' | 'failed'
 }
 
+export type LiquidType = 'Water' | 'Cooking Oil' | 'Juice' | 'Milk'
+
 export interface AppSettings {
   poolPricePerGame: number       // KES
   washerRate: number             // minutes per KES
   dryerRate: number              // minutes per KES
-  liquidPrices: { Water: number; Juice: number; Milk: number; Other: number }  // KES per 100ml
+  liquidPrices: Record<LiquidType, number>      // KES per 100ml
+  liquidFlowRates: Record<LiquidType, number>   // ml per second
   vendingTaxRate: number         // percent 0-100
   soilSubscriptionPrice: number  // KES per month
 }
@@ -96,7 +99,8 @@ export const useAdminStore = create<AdminState>()(set => ({
     poolPricePerGame:       50,
     washerRate:             0.45,
     dryerRate:              0.35,
-    liquidPrices:           { Water: 2, Juice: 8, Milk: 6, Other: 4 },
+    liquidPrices:           { Water: 2, 'Cooking Oil': 15, Juice: 8, Milk: 6 },
+    liquidFlowRates:        { Water: 80, 'Cooking Oil': 30, Juice: 60, Milk: 50 },  // ml/sec
     vendingTaxRate:         0,
     soilSubscriptionPrice:  500,
   },

@@ -114,12 +114,25 @@ export default function AppSettings() {
           )}
 
           {tab === 'liquid' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              {(['Water', 'Juice', 'Milk', 'Other'] as const).map(type => (
-                <Field key={type} label={type} hint="KES per 100ml dispensed"
-                  value={appSettings.liquidPrices[type]} min={1} max={50} step={1} unit="KES/100ml" accent={current.accent}
-                  onChange={v => updateAppSettings({ liquidPrices: { ...appSettings.liquidPrices, [type]: v } })} />
-              ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)',
+                textTransform: 'uppercase', letterSpacing: '0.1em' }}>Pricing (KES per 100 ml)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {(['Water', 'Cooking Oil', 'Juice', 'Milk'] as const).map(liq => (
+                  <Field key={liq} label={liq} hint="KES per 100ml dispensed"
+                    value={appSettings.liquidPrices[liq]} min={1} max={50} step={1} unit="KES/100ml" accent={current.accent}
+                    onChange={v => updateAppSettings({ liquidPrices: { ...appSettings.liquidPrices, [liq]: v } })} />
+                ))}
+              </div>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)',
+                textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 4 }}>Flow Rate (ml / second)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {(['Water', 'Cooking Oil', 'Juice', 'Milk'] as const).map(liq => (
+                  <Field key={liq + '_flow'} label={liq} hint="Dispense speed — affects duration"
+                    value={appSettings.liquidFlowRates[liq]} min={5} max={250} step={5} unit="ml/s" accent="#38d4ff"
+                    onChange={v => updateAppSettings({ liquidFlowRates: { ...appSettings.liquidFlowRates, [liq]: v } })} />
+                ))}
+              </div>
             </div>
           )}
 

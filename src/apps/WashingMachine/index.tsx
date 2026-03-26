@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import BackButton from '../../components/BackButton'
 import MpesaCheckout from '../../components/MpesaCheckout'
 import DispensingScreen from '../../components/DispensingScreen'
+import WashingAnim from './WashingAnim'
 
 const WASHER_RATE = parseFloat(import.meta.env.VITE_WASHER_RATE ?? '0.45')
 const DRYER_RATE  = parseFloat(import.meta.env.VITE_DRYER_RATE  ?? '0.35')
@@ -65,18 +66,8 @@ export default function WashingMachine() {
           ))}
         </div>
 
-        {/* Drum */}
-        <motion.div
-          style={{
-            width: 76, height: 76, borderRadius: '50%',
-            border: `5px solid ${ACCENT}30`,
-            borderTop: `5px solid ${ACCENT}`,
-            borderRight: `5px solid ${ACCENT}60`,
-            boxShadow: `0 0 24px ${ACCENT}30`,
-          }}
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
-        />
+        {/* Drum simulation */}
+        <WashingAnim size={130} />
 
         {/* Amount selector */}
         <div style={{ display: 'flex', gap: 8 }}>

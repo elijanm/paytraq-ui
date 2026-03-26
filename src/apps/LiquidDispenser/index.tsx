@@ -1,14 +1,21 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Delete } from 'lucide-react'
+import { Delete, Timer } from 'lucide-react'
 import BackButton from '../../components/BackButton'
 import MpesaCheckout from '../../components/MpesaCheckout'
 import DispensingScreen from '../../components/DispensingScreen'
+import { useAdminStore } from '../../store/adminStore'
+import type { LiquidType } from '../../store/adminStore'
 
-// KES per 100ml
-const LIQUID_PRICES: Record<string, number> = { Water: 2, 'Cooking Oil': 15, Juice: 8, Milk: 6 }
+// KES per 100ml (fallback — real values come from adminStore)
 const EMOJIS: Record<string, string> = { Water: '💧', 'Cooking Oil': '🫒', Juice: '🧃', Milk: '🥛' }
 const ACCENT = '#ff9044'
+
+function fmtTime(seconds: number): string {
+  if (seconds < 60) return `${Math.ceil(seconds)}s`
+  const m = Math.floor(seconds / 60), s = Math.ceil(seconds % 60)
+  return s > 0 ? `${m}m ${s}s` : `${m}m`
+}
 
 type View = 'select' | 'checkout' | 'dispensing'
 
@@ -21,13 +28,16 @@ function fmtVol(ml: number): string {
 const KEYS = ['1','2','3','4','5','6','7','8','9','','0','⌫']
 
 export default function LiquidDispenser() {
-  const [liquid, setLiquid] = useState('Water')
+  const { liquidPrices, liquidFlowRates } = useAdminStore(s => s.appSettings)
+  const [liquid, setLiquid] = useState<LiquidType>('Water')
   const [amount, setAmount] = useState('')  // KES string
   const [view, setView] = useState<View>('select')
 
-  const amountNum = parseInt(amount || '0', 10)
-  const ratePerMl = LIQUID_PRICES[liquid] / 100        // KES per ml
-  const volumeMl  = ratePerMl > 0 ? amountNum / ratePerMl : 0
+  const amountNum  = parseInt(amount || '0', 10)
+  const ratePerMl  = liquidPrices[liquid] / 100        // KES per ml
+  const volumeMl   = ratePerMl > 0 ? amountNum / ratePerMl : 0
+  const flowRate   = liquidFlowRates[liquid]            // ml/sec
+  const estSeconds = flowRate > 0 && volumeMl > 0 ? volumeMl / flowRate : 0
   const canDispense = amountNum >= 10
 
   const handleKey = (k: string) => {
@@ -38,7 +48,7 @@ export default function LiquidDispenser() {
     setAmount(p => p + k)
   }
 
-  if (view === 'dispensing') return <DispensingScreen type="liquid" meta={{ volume: volumeMl }} />
+  if (view === 'dispensing') return <DispensingScreen type="liquid" meta={{ volume: volumeMl, flowRate }} />
 
   return (
     <motion.div
@@ -67,7 +77,7 @@ export default function LiquidDispenser() {
           <div>
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Select liquid</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
-              {Object.keys(LIQUID_PRICES).map(l => (
+              {(Object.keys(liquidPrices) as LiquidType[]).map(l => (
                 <motion.button key={l} whileTap={{ scale: 0.92 }} onClick={() => setLiquid(l)}
                   style={{
                     padding: '7px 4px', borderRadius: 10, cursor: 'pointer',
@@ -79,7 +89,7 @@ export default function LiquidDispenser() {
                   }}>
                   <span style={{ fontSize: 18 }}>{EMOJIS[l]}</span>
                   <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 8, color: liquid === l ? ACCENT : 'var(--text-muted)' }}>{l}</span>
-                  <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, color: 'var(--text-dim)' }}>KES {LIQUID_PRICES[l]}/100ml</span>
+                  <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, color: 'var(--text-dim)' }}>KES {liquidPrices[l]}/100ml</span>
                 </motion.button>
               ))}
             </div>
@@ -128,9 +138,19 @@ export default function LiquidDispenser() {
             {canDispense && (
               <motion.div
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-dim)', textAlign: 'center' }}
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
               >
-                {(LIQUID_PRICES[liquid] / 100).toFixed(2)} KES/ml · {liquid}
+                <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-dim)', textAlign: 'center' }}>
+                  {(liquidPrices[liquid] / 100).toFixed(2)} KES/ml · {liquid}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4,
+                  background: ACCENT + '15', border: `1px solid ${ACCENT}35`,
+                  borderRadius: 6, padding: '2px 8px' }}>
+                  <Timer size={9} color={ACCENT} strokeWidth={2} />
+                  <span style={{ fontFamily: 'var(--font-display)', fontSize: 9, color: ACCENT, fontWeight: 700 }}>
+                    ~{fmtTime(estSeconds)} at {flowRate} ml/s
+                  </span>
+                </div>
               </motion.div>
             )}
           </div>
