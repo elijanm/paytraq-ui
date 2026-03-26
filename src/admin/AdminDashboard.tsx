@@ -1,20 +1,22 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { BarChart2, Layers, SlidersHorizontal, Settings2, LogOut, ChevronRight } from 'lucide-react'
+import { BarChart2, Layers, SlidersHorizontal, Settings2, LogOut, ChevronRight, Cpu } from 'lucide-react'
 import { useAdminStore } from '../store/adminStore'
-import Analytics     from './tabs/Analytics'
-import AppConfig     from './tabs/AppConfig'
-import AppSettings   from './tabs/AppSettings'
+import Analytics      from './tabs/Analytics'
+import AppConfig      from './tabs/AppConfig'
+import AppSettings    from './tabs/AppSettings'
 import SystemSettings from './tabs/SystemSettings'
+import Devices        from './tabs/Devices'
 
-type Tab = 'analytics' | 'apps' | 'settings' | 'system'
+type Tab = 'analytics' | 'apps' | 'settings' | 'system' | 'devices'
 
 const NAV: { key: Tab; label: string; icon: typeof BarChart2; accent: string }[] = [
-  { key: 'analytics', label: 'Analytics',  icon: BarChart2,          accent: '#00e5a0' },
-  { key: 'apps',      label: 'App Config', icon: Layers,             accent: '#38d4ff' },
-  { key: 'settings',  label: 'App Settings',icon: SlidersHorizontal, accent: '#b48aff' },
-  { key: 'system',    label: 'System',     icon: Settings2,          accent: '#ffc130' },
+  { key: 'analytics', label: 'Analytics',   icon: BarChart2,          accent: '#00e5a0' },
+  { key: 'apps',      label: 'App Config',  icon: Layers,             accent: '#38d4ff' },
+  { key: 'settings',  label: 'App Settings',icon: SlidersHorizontal,  accent: '#b48aff' },
+  { key: 'devices',   label: 'Devices',     icon: Cpu,                accent: '#f472b6' },
+  { key: 'system',    label: 'System',      icon: Settings2,          accent: '#ffc130' },
 ]
 
 export default function AdminDashboard() {
@@ -120,6 +122,7 @@ export default function AdminDashboard() {
               {tab === 'analytics' && <Analytics />}
               {tab === 'apps'      && <AppConfig />}
               {tab === 'settings'  && <AppSettings />}
+              {tab === 'devices'   && <Devices />}
               {tab === 'system'    && <SystemSettings />}
             </motion.div>
           </AnimatePresence>
