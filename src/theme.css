@@ -1,0 +1,102 @@
+:root {
+  --bg:          #080a10;
+  --surface:     #10131c;
+  --surface-2:   #181d2a;
+  --surface-3:   #1f2538;
+  --border:      #252d40;
+  --border-hi:   #3a4560;
+  --text:        #eef2ff;
+  --text-muted:  #5a6a90;
+  --text-dim:    #8494b8;
+
+  --vending:     #00e5a0;
+  --pool:        #b48aff;
+  --washing:     #38d4ff;
+  --liquid:      #ff9044;
+  --warehouse:   #ffc130;
+  --addons:      #ff6eb4;
+  --mpesa:       #22c55e;
+
+  --radius:      14px;
+  --radius-lg:   20px;
+  --font-display: 'Space Mono', monospace;
+  --font-body:    'Nunito', sans-serif;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  background: #000;
+}
+
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  background: #000;
+  color: var(--text);
+  font-family: var(--font-body);
+}
+
+#root {
+  width: 800px;
+  height: 480px;
+  overflow: hidden;
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+}
+
+::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; -ms-overflow-style: none; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-4px); }
+}
+
+@keyframes drop-in {
+  0%   { transform: translateY(-60px) scale(0.7); opacity: 0; }
+  70%  { transform: translateY(4px) scale(1.05); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes fill-rise {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+
+/* Card press ripple */
+.card-press {
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.card-press:active {
+  transform: scale(0.95);
+}
