@@ -184,11 +184,12 @@ function ShutdownScreen() {
   )
 }
 
-const WIFI_PIN = '12345'
+const WIFI_API = 'http://127.0.0.1:3001'
 
-// ── Simulated network list ────────────────────────────────────────────────────
-interface Network { ssid: string; bars: number; secured: boolean; connected?: boolean }
-const NETWORKS: Network[] = [
+// ── Network type ──────────────────────────────────────────────────────────────
+interface Network { ssid: string; bars: number; signal?: number; secured: boolean; connected?: boolean }
+
+const MOCK_NETWORKS: Network[] = [
   { ssid: 'Paytraq-Kiosk',   bars: 4, secured: true,  connected: true  },
   { ssid: 'Office-5G',       bars: 3, secured: true  },
   { ssid: 'NexiNet-Fast',    bars: 3, secured: true  },
@@ -213,172 +214,257 @@ function SignalBars({ bars, color }: { bars: number; color: string }) {
   )
 }
 
-// ── PIN modal (shown when a network is selected) ──────────────────────────────
-interface PinModalProps { network: Network; onBack: () => void; onConnected: (ssid: string) => void }
-function PinModal({ network, onBack, onConnected }: PinModalProps) {
-  const [pin, setPin] = useState('')
-  const [shake, setShake] = useState(false)
-  const [phase, setPhase] = useState<'entry' | 'connecting' | 'ok' | 'fail'>('entry')
-  const KEYS = ['1','2','3','4','5','6','7','8','9','','0','⌫']
+// ── Full-screen WiFi password overlay with QWERTY keyboard ───────────────────
+const KB_ROWS_ALPHA = [
+  ['q','w','e','r','t','y','u','i','o','p'],
+  ['a','s','d','f','g','h','j','k','l'],
+  ['⇧','z','x','c','v','b','n','m','⌫'],
+]
+const KB_ROWS_NUM = [
+  ['1','2','3','4','5','6','7','8','9','0'],
+  ['-','/','_','.','@','#','!','&','(', ')'],
+  ['⇧','%','+','=','~','^','*','<','>','⌫'],
+]
+
+interface WifiConnectOverlayProps {
+  network: Network
+  apiAvailable: boolean
+  onBack: () => void
+  onConnected: (ssid: string) => void
+}
+
+function WifiConnectOverlay({ network, apiAvailable, onBack, onConnected }: WifiConnectOverlayProps) {
+  const [password, setPassword] = useState('')
+  const [caps, setCaps]         = useState(false)
+  const [numMode, setNumMode]   = useState(false)
+  const [phase, setPhase]       = useState<'entry' | 'connecting' | 'ok' | 'fail'>('entry')
+  const [errorMsg, setErrorMsg] = useState('')
+  const [showPw, setShowPw]     = useState(false)
+
+  const rows = numMode ? KB_ROWS_NUM : KB_ROWS_ALPHA
 
   const handleKey = (k: string) => {
     if (phase !== 'entry') return
-    if (k === '⌫') { setPin(p => p.slice(0, -1)); return }
-    if (k === '') return
-    if (pin.length >= 8) return
-    setPin(p => p + k)
+    if (k === '⌫') { setPassword(p => p.slice(0, -1)); return }
+    if (k === '⇧') { setNumMode(m => !m); setCaps(false); return }
+    const char = (!numMode && caps) ? k.toUpperCase() : k
+    setPassword(p => p + char)
+    if (caps && !numMode) setCaps(false)
   }
 
-  const tryConnect = () => {
-    if (pin.length < 4) return
+  const tryConnect = async () => {
+    if (!network.secured && password === '' || password.length < 1) {
+      // open network — connect directly
+    }
     setPhase('connecting')
-    setTimeout(() => {
-      const ok = !network.secured || pin === WIFI_PIN
-      if (ok) {
-        setPhase('ok')
-        setTimeout(() => onConnected(network.ssid), 1000)
-      } else {
-        setPhase('fail')
-        setShake(true)
-        setTimeout(() => { setShake(false); setPhase('entry'); setPin('') }, 1400)
+
+    if (apiAvailable) {
+      try {
+        const res = await fetch(`${WIFI_API}/wifi/connect`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssid: network.ssid, password: network.secured ? password : undefined }),
+        })
+        const data = await res.json()
+        if (data.ok) { setPhase('ok'); setTimeout(() => onConnected(network.ssid), 1200) }
+        else { setErrorMsg(data.error ?? 'Connection failed'); setPhase('fail'); setTimeout(() => { setPhase('entry'); setPassword('') }, 2000) }
+      } catch {
+        setErrorMsg('Sidecar not reachable'); setPhase('fail'); setTimeout(() => { setPhase('entry'); setPassword('') }, 2000)
       }
-    }, 1200)
+    } else {
+      // simulation
+      setTimeout(() => {
+        setPhase('ok')
+        setTimeout(() => onConnected(network.ssid), 1200)
+      }, 1400)
+    }
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px' }}>
-      {/* Back + network header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <motion.button whileTap={{ scale: 0.9 }} onClick={onBack}
-          style={{ width: 26, height: 26, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0, flexShrink: 0 }}>
-          <ChevronLeft size={13} strokeWidth={2.5} color="var(--text)" />
-        </motion.button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11, color: 'var(--text)', lineHeight: 1 }}>{network.ssid}</div>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>
-            {network.secured ? 'WPA2 Secured' : 'Open network'}
+    <motion.div
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(4,6,12,0.92)',
+        backdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: 0 }}
+    >
+      <motion.div
+        initial={{ scale: 0.94, y: 20 }} animate={{ scale: 1, y: 0 }}
+        transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+        style={{ width: 760, background: 'var(--surface)', borderRadius: 20,
+          border: '1px solid var(--border)', overflow: 'hidden',
+          boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px',
+          borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+          <motion.button whileTap={{ scale: 0.9 }} onClick={onBack}
+            style={{ width: 32, height: 32, borderRadius: 9, border: '1px solid var(--border)',
+              background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', padding: 0, flexShrink: 0 }}>
+            <ChevronLeft size={16} strokeWidth={2.5} color="var(--text)" />
+          </motion.button>
+          <Wifi size={16} color="#00e5a0" strokeWidth={1.8} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: 'var(--text)' }}>
+              {network.ssid}
+            </div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)' }}>
+              {network.secured ? 'Enter WiFi password' : 'Open network — tap Connect'}
+            </div>
+          </div>
+          <SignalBars bars={network.bars} color="#00e5a0" />
+        </div>
+
+        {/* Password field */}
+        <div style={{ padding: '12px 18px 8px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1, padding: '10px 14px', borderRadius: 10, minHeight: 40,
+            background: 'var(--bg)', border: '1px solid var(--border)',
+            fontFamily: 'var(--font-display)', fontSize: 16, color: 'var(--text)',
+            letterSpacing: showPw ? '0.04em' : '0.22em',
+            overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+            {password.length > 0
+              ? (showPw ? password : '●'.repeat(password.length))
+              : <span style={{ color: 'var(--text-muted)', fontSize: 12, letterSpacing: '0.04em' }}>password</span>
+            }
+          </div>
+          <motion.button whileTap={{ scale: 0.9 }} onClick={() => setShowPw(s => !s)}
+            style={{ width: 38, height: 38, borderRadius: 9, border: '1px solid var(--border)',
+              background: showPw ? '#00e5a015' : 'var(--surface-2)', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ fontSize: 14 }}>{showPw ? '🙈' : '👁'}</span>
+          </motion.button>
+        </div>
+
+        {/* Status */}
+        <AnimatePresence mode="wait">
+          {phase !== 'entry' && (
+            <motion.div key={phase} initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              style={{ padding: '4px 18px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+              {phase === 'connecting' && <>
+                <motion.div animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}>
+                  <RefreshCw size={11} color="#00e5a0" />
+                </motion.div>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: '#00e5a0' }}>Connecting…</span>
+              </>}
+              {phase === 'ok' && <>
+                <CheckCircle size={11} color="#00e5a0" />
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: '#00e5a0' }}>Connected!</span>
+              </>}
+              {phase === 'fail' && <>
+                <XCircle size={11} color="#ff6060" />
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: '#ff6060' }}>{errorMsg || 'Incorrect password'}</span>
+              </>}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Keyboard */}
+        <div style={{ padding: '8px 14px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {rows.map((row, ri) => (
+            <div key={ri} style={{ display: 'flex', gap: 5, justifyContent: 'center' }}>
+              {row.map((k, ki) => {
+                const isSpecial = k === '⌫' || k === '⇧'
+                const isShiftActive = k === '⇧' && (caps || numMode)
+                const label = (!numMode && caps && k.length === 1 && k !== '⇧') ? k.toUpperCase() : k
+                return (
+                  <motion.button key={ki} whileTap={{ scale: 0.84 }} onClick={() => handleKey(k)}
+                    style={{
+                      height: 44, minWidth: isSpecial ? 60 : 64, flex: isSpecial ? '0 0 60px' : '1',
+                      borderRadius: 9, cursor: 'pointer', padding: 0,
+                      background: isShiftActive
+                        ? '#00e5a030'
+                        : isSpecial ? 'var(--surface-2)' : 'var(--bg)',
+                      border: `1px solid ${isShiftActive ? '#00e5a060' : isSpecial ? 'var(--border)' : 'var(--border)'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: k === '⌫' ? '#00e5a0' : isShiftActive ? '#00e5a0' : 'var(--text)',
+                      fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14,
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                    }}>
+                    {k === '⌫' ? <Delete size={14} strokeWidth={2} /> : label}
+                  </motion.button>
+                )
+              })}
+            </div>
+          ))}
+
+          {/* Bottom row: mode toggle + space + connect */}
+          <div style={{ display: 'flex', gap: 5, marginTop: 2 }}>
+            <motion.button whileTap={{ scale: 0.9 }} onClick={() => setNumMode(m => !m)}
+              style={{ width: 76, height: 44, borderRadius: 9, cursor: 'pointer',
+                background: numMode ? '#00e5a015' : 'var(--surface-2)', border: `1px solid ${numMode ? '#00e5a040' : 'var(--border)'}`,
+                fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11,
+                color: numMode ? '#00e5a0' : 'var(--text-muted)' }}>
+              {numMode ? 'ABC' : '?123'}
+            </motion.button>
+            <motion.button whileTap={{ scale: 0.97 }} onClick={() => handleKey(' ')}
+              style={{ flex: 1, height: 44, borderRadius: 9, cursor: 'pointer',
+                background: 'var(--bg)', border: '1px solid var(--border)',
+                fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)' }}>
+              space
+            </motion.button>
+            <motion.button whileTap={{ scale: 0.96 }} onClick={tryConnect}
+              disabled={network.secured && password.length < 1}
+              style={{ width: 120, height: 44, borderRadius: 9, cursor: 'pointer',
+                background: (!network.secured || password.length >= 1)
+                  ? 'linear-gradient(135deg, #00e5a0, #00a871)'
+                  : 'var(--surface-2)',
+                border: 'none',
+                color: (!network.secured || password.length >= 1) ? '#000' : 'var(--text-muted)',
+                fontFamily: 'var(--font-body)', fontWeight: 800, fontSize: 13,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                boxShadow: (!network.secured || password.length >= 1) ? '0 4px 16px #00e5a040' : 'none' }}>
+              <Lock size={13} strokeWidth={2.5} />
+              Connect
+            </motion.button>
           </div>
         </div>
-        <SignalBars bars={network.bars} color="#00e5a0" />
-      </div>
-
-      {/* Status feedback */}
-      <AnimatePresence mode="wait">
-        {phase === 'connecting' && (
-          <motion.div key="conn" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '6px 0' }}>
-            <motion.div animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}>
-              <RefreshCw size={12} color="#00e5a0" />
-            </motion.div>
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: '#00e5a0' }}>Connecting to {network.ssid}…</span>
-          </motion.div>
-        )}
-        {phase === 'ok' && (
-          <motion.div key="ok" initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '6px 0' }}>
-            <CheckCircle size={12} color="#00e5a0" />
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: '#00e5a0' }}>Connected!</span>
-          </motion.div>
-        )}
-        {phase === 'fail' && (
-          <motion.div key="fail" animate={{ x: [0, -6, 6, -4, 4, 0] }} transition={{ duration: 0.4 }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '6px 0' }}>
-            <XCircle size={12} color="#ff6060" />
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: '#ff6060' }}>Wrong password</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* PIN dots */}
-      {(phase === 'entry' || phase === 'fail') && (
-        <motion.div
-          animate={shake ? { x: [0, -8, 8, -6, 6, 0] } : {}}
-          transition={{ duration: 0.4 }}
-          style={{ display: 'flex', justifyContent: 'center', gap: 6 }}
-        >
-          {Array.from({ length: Math.max(pin.length, 4) }).map((_, i) => (
-            <motion.div key={i}
-              animate={{ scale: i === pin.length - 1 ? [1, 1.3, 1] : 1 }}
-              transition={{ duration: 0.15 }}
-              style={{
-                width: 10, height: 10, borderRadius: '50%',
-                background: i < pin.length
-                  ? (phase === 'fail' ? '#ff6060' : '#00e5a0')
-                  : 'var(--border)',
-                transition: 'background 0.15s',
-              }}
-            />
-          ))}
-        </motion.div>
-      )}
-
-      {/* Numpad */}
-      {(phase === 'entry' || phase === 'fail') && (
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
-            {KEYS.map((k, i) => (
-              <motion.button key={i} whileTap={k ? { scale: 0.88 } : {}} onClick={() => handleKey(k)}
-                style={{
-                  height: 34, borderRadius: 8, cursor: k ? 'pointer' : 'default', padding: 0,
-                  background: k === '⌫' ? '#00e5a010' : k ? 'var(--surface-2)' : 'transparent',
-                  border: k ? `1px solid ${k === '⌫' ? '#00e5a030' : 'var(--border)'}` : 'none',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: k === '⌫' ? '#00e5a0' : 'var(--text)',
-                  fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15,
-                }}>
-                {k === '⌫' ? <Delete size={13} strokeWidth={2} /> : k}
-              </motion.button>
-            ))}
-          </div>
-
-          <motion.button whileTap={{ scale: 0.96 }} onClick={tryConnect}
-            disabled={pin.length < 4}
-            style={{
-              width: '100%', padding: '9px', borderRadius: 10, cursor: pin.length >= 4 ? 'pointer' : 'default',
-              background: pin.length >= 4 ? 'linear-gradient(135deg, #00e5a0, #00a871)' : 'var(--surface-2)',
-              border: 'none', color: pin.length >= 4 ? '#000' : 'var(--text-muted)',
-              fontFamily: 'var(--font-body)', fontWeight: 800, fontSize: 12,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            }}>
-            <Lock size={12} strokeWidth={2.5} />
-            Connect
-          </motion.button>
-        </>
-      )}
-    </div>
+      </motion.div>
+    </motion.div>
   )
 }
 
 // ── WiFi tab — network list ───────────────────────────────────────────────────
 function WifiTab({ online }: { online: boolean }) {
-  const [connectedSsid, setConnectedSsid] = useState(online ? 'Paytraq-Kiosk' : '')
-  const [selected, setSelected] = useState<Network | null>(null)
-  const [scanning, setScanning] = useState(false)
+  const [networks, setNetworks]       = useState<Network[]>(MOCK_NETWORKS.map(n => ({ ...n })))
+  const [connectedSsid, setConnectedSsid] = useState(online ? MOCK_NETWORKS[0].ssid : '')
+  const [selected, setSelected]       = useState<Network | null>(null)
+  const [scanning, setScanning]       = useState(false)
+  const [apiAvailable, setApiAvailable] = useState(false)
 
-  const networks = NETWORKS.map(n => ({ ...n, connected: n.ssid === connectedSsid }))
-
-  const rescan = () => {
+  const fetchNetworks = async () => {
     setScanning(true)
-    setTimeout(() => setScanning(false), 1200)
+    try {
+      const res  = await fetch(`${WIFI_API}/wifi/scan`, { signal: AbortSignal.timeout(12000) })
+      const data = await res.json()
+      if (data.ok && data.networks.length > 0) {
+        setNetworks(data.networks)
+        const conn = data.networks.find((n: Network) => n.connected)
+        if (conn) setConnectedSsid(conn.ssid)
+        setApiAvailable(true)
+      }
+    } catch {
+      // sidecar not available — keep mock data, simulation mode
+    }
+    setScanning(false)
   }
 
+  useEffect(() => { fetchNetworks() }, [])
+
+  const displayNetworks = networks.map(n => ({ ...n, connected: n.connected || n.ssid === connectedSsid }))
+
   return (
-    <AnimatePresence mode="wait">
-      {selected ? (
-        <motion.div key="pin" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 20, opacity: 0 }} transition={{ duration: 0.18 }}>
-          <PinModal
-            network={selected}
-            onBack={() => setSelected(null)}
-            onConnected={(ssid) => { setConnectedSsid(ssid); setSelected(null) }}
-          />
-        </motion.div>
-      ) : (
+    <>
+      <AnimatePresence mode="wait">
         <motion.div key="list" initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: 0.18 }}>
           <div style={{ padding: '8px 10px 10px' }}>
             {/* Scan header */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Available networks</span>
-              <motion.button whileTap={{ scale: 0.88 }} onClick={rescan}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Available networks</span>
+                {apiAvailable && (
+                  <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, color: '#00e5a060', padding: '1px 5px', borderRadius: 4, background: '#00e5a010', border: '1px solid #00e5a020' }}>LIVE</span>
+                )}
+              </div>
+              <motion.button whileTap={{ scale: 0.88 }} onClick={fetchNetworks}
                 style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)' }}>
                 <motion.div animate={scanning ? { rotate: 360 } : {}} transition={{ duration: 0.9, repeat: scanning ? Infinity : 0, ease: 'linear' }}>
                   <RefreshCw size={10} strokeWidth={2} />
@@ -389,7 +475,7 @@ function WifiTab({ online }: { online: boolean }) {
 
             {/* Network rows */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {networks.map((net, i) => (
+              {displayNetworks.map((net, i) => (
                 <motion.button key={net.ssid}
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -403,12 +489,9 @@ function WifiTab({ online }: { online: boolean }) {
                     border: `1px solid ${net.connected ? '#00e5a035' : 'var(--border)'}`,
                     textAlign: 'left',
                   }}>
-                  {/* Icon */}
                   <div style={{ color: net.connected ? '#00e5a0' : 'var(--text-muted)', flexShrink: 0 }}>
                     {net.connected ? <Wifi size={14} strokeWidth={1.8} /> : <Signal size={14} strokeWidth={1.8} />}
                   </div>
-
-                  {/* SSID + type */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11, color: net.connected ? '#00e5a0' : 'var(--text)', lineHeight: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {net.ssid}
@@ -417,8 +500,6 @@ function WifiTab({ online }: { online: boolean }) {
                       {net.connected ? 'Connected' : net.secured ? 'Secured' : 'Open'}
                     </div>
                   </div>
-
-                  {/* Signal + lock */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
                     <SignalBars bars={net.bars} color={net.connected ? '#00e5a0' : '#5a6a90'} />
                     {net.secured && <Lock size={9} strokeWidth={2} color={net.connected ? '#00e5a060' : '#3a4560'} />}
@@ -429,8 +510,20 @@ function WifiTab({ online }: { online: boolean }) {
             </div>
           </div>
         </motion.div>
-      )}
-    </AnimatePresence>
+      </AnimatePresence>
+
+      {/* Full-screen password overlay */}
+      <AnimatePresence>
+        {selected && (
+          <WifiConnectOverlay
+            network={selected}
+            apiAvailable={apiAvailable}
+            onBack={() => setSelected(null)}
+            onConnected={(ssid) => { setConnectedSsid(ssid); setSelected(null) }}
+          />
+        )}
+      </AnimatePresence>
+    </>
   )
 }
 
@@ -460,49 +553,115 @@ function fmtTime(sec: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
+interface HwBattery { ok: true; voltage: number; currentMA: number; percent: number; charging: boolean }
+
 function BatteryTab({ onShutdown }: { onShutdown: () => void }) {
-  const b = useBattery()
-  const pct = b ? Math.round(b.level * 100) : null
-  const barColor = !pct ? '#5a6a90' : pct > 50 ? '#00e5a0' : pct > 20 ? '#ffc130' : '#ff6060'
+  const webB = useBattery()
+
+  // Real hardware data from INA219 via sidecar
+  const [hw, setHw]         = useState<HwBattery | null>(null)
+  const [hwError, setHwError] = useState<string | null>(null)
+  const [polling, setPolling] = useState(false)
+
+  const fetchHw = async () => {
+    try {
+      const res  = await fetch(`${WIFI_API}/battery`, { signal: AbortSignal.timeout(5000) })
+      const data = await res.json()
+      if (data.ok) { setHw(data as HwBattery); setHwError(null) }
+      else setHwError(data.hint ?? data.error ?? 'I2C read failed')
+    } catch {
+      setHwError('Sidecar not reachable')
+    }
+  }
+
+  useEffect(() => {
+    fetchHw()
+    const id = setInterval(fetchHw, 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Prefer hardware reading; fall back to Web Battery API
+  const pct      = hw ? hw.percent : (webB ? Math.round(webB.level * 100) : null)
+  const charging = hw ? hw.charging : (webB?.charging ?? false)
+  const source   = hw ? 'X1203 UPS' : webB ? 'Web API' : null
+
+  const barColor = pct === null ? '#5a6a90' : pct > 50 ? '#00e5a0' : pct > 20 ? '#ffc130' : '#ff6060'
 
   function Icon() {
-    if (!b)              return <Battery        size={32} color="#5a6a90" strokeWidth={1.2} />
-    if (b.charging)      return <BatteryCharging size={32} color="#00e5a0" strokeWidth={1.2} />
-    if (b.level > 0.7)   return <BatteryFull    size={32} color="#00e5a0" strokeWidth={1.2} />
-    if (b.level > 0.3)   return <BatteryMedium  size={32} color="#ffc130" strokeWidth={1.2} />
-    return                      <BatteryLow     size={32} color="#ff6060" strokeWidth={1.2} />
+    if (pct === null)  return <Battery         size={32} color="#5a6a90" strokeWidth={1.2} />
+    if (charging)      return <BatteryCharging size={32} color="#00e5a0" strokeWidth={1.2} />
+    if (pct > 70)      return <BatteryFull     size={32} color="#00e5a0" strokeWidth={1.2} />
+    if (pct > 30)      return <BatteryMedium   size={32} color="#ffc130" strokeWidth={1.2} />
+    return                    <BatteryLow      size={32} color="#ff6060" strokeWidth={1.2} />
   }
+
+  const rows = hw ? [
+    { label: 'Status',   value: charging ? '⚡ Charging' : '🔋 Discharging' },
+    { label: 'Voltage',  value: `${hw.voltage.toFixed(2)} V` },
+    { label: 'Current',  value: `${hw.currentMA > 0 ? '+' : ''}${hw.currentMA} mA` },
+    { label: 'Charge',   value: `${hw.percent}%` },
+    { label: 'Source',   value: 'Suptronics X1203' },
+  ] : webB ? [
+    { label: 'Status',       value: charging ? '⚡ Charging' : '🔋 Discharging' },
+    { label: 'Time to full', value: charging ? fmtTime(webB.chargingTime ?? 0) : '—' },
+    { label: 'Time left',    value: !charging ? fmtTime(webB.dischargingTime ?? 0) : '—' },
+    { label: 'Level',        value: `${pct}%` },
+    { label: 'Source',       value: 'Web Battery API' },
+  ] : []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '14px 16px' }}>
+      {/* Big readout */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <Icon />
-        <div>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 26, color: barColor, lineHeight: 1 }}>
-            {pct !== null ? `${pct}%` : 'N/A'}
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 26, color: barColor, lineHeight: 1 }}>
+              {pct !== null ? `${pct}%` : 'N/A'}
+            </div>
+            {hw && (
+              <div style={{ fontFamily: 'var(--font-display)', fontSize: 12, color: 'var(--text-muted)' }}>
+                {hw.voltage.toFixed(2)} V
+              </div>
+            )}
           </div>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
-            {!b ? 'Battery API unavailable' : b.charging ? 'Charging' : 'On battery'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)' }}>
+              {pct === null ? 'No data' : charging ? 'Charging' : 'On battery'}
+            </div>
+            {source && (
+              <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, color: hw ? '#00e5a060' : '#5a6a90',
+                padding: '1px 5px', borderRadius: 4, background: hw ? '#00e5a010' : 'var(--surface-2)',
+                border: `1px solid ${hw ? '#00e5a020' : 'var(--border)'}` }}>
+                {source}
+              </span>
+            )}
+            {/* Refresh button */}
+            <motion.button whileTap={{ scale: 0.88 }} onClick={() => { setPolling(true); fetchHw().finally(() => setPolling(false)) }}
+              style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 3, padding: '2px 7px',
+                borderRadius: 5, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)' }}>
+              <motion.div animate={polling ? { rotate: 360 } : {}} transition={{ duration: 0.8, repeat: polling ? Infinity : 0, ease: 'linear' }}>
+                <RefreshCw size={9} strokeWidth={2} />
+              </motion.div>
+            </motion.button>
           </div>
         </div>
       </div>
 
-      {b && (
+      {/* Progress bar */}
+      {pct !== null && (
         <div style={{ width: '100%', height: 8, borderRadius: 4, background: 'var(--surface-2)', overflow: 'hidden' }}>
-          <motion.div initial={{ width: 0 }} animate={{ width: `${b.level * 100}%` }} transition={{ duration: 0.8, ease: 'easeOut' }}
+          <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: 'easeOut' }}
             style={{ height: '100%', borderRadius: 4, background: barColor, boxShadow: `0 0 8px ${barColor}60` }} />
         </div>
       )}
 
-      {b && (
+      {/* Data rows */}
+      {rows.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          {[
-            { label: 'Status',       value: b.charging ? '⚡ Charging' : '🔋 Discharging' },
-            { label: 'Time to full', value: b.charging ? fmtTime(b.chargingTime ?? 0) : '—' },
-            { label: 'Time left',    value: !b.charging ? fmtTime(b.dischargingTime ?? 0) : '—' },
-            { label: 'Level',        value: `${pct}%  (${b.level.toFixed(3)})` },
-          ].map(row => (
-            <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 10px', borderRadius: 8, background: 'var(--surface-2)' }}>
+          {rows.map(row => (
+            <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '5px 10px', borderRadius: 8, background: 'var(--surface-2)' }}>
               <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)' }}>{row.label}</span>
               <span style={{ fontFamily: 'var(--font-display)', fontSize: 10, color: 'var(--text)', fontWeight: 700 }}>{row.value}</span>
             </div>
@@ -510,26 +669,22 @@ function BatteryTab({ onShutdown }: { onShutdown: () => void }) {
         </div>
       )}
 
-      {!b && (
-        <div style={{ textAlign: 'center', padding: '8px 0' }}>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)' }}>Battery API not available in this browser.</div>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)', marginTop: 4 }}>Available on Chrome/Chromium on device.</div>
+      {/* Error / no-data hint */}
+      {pct === null && (
+        <div style={{ textAlign: 'center', padding: '4px 0' }}>
+          {hwError && <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: '#ff6060', marginBottom: 3 }}>{hwError}</div>}
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)' }}>
+            Enable I2C on Pi: <span style={{ fontFamily: 'var(--font-display)', color: 'var(--text)' }}>raspi-config → Interfaces → I2C</span>
+          </div>
         </div>
       )}
 
       {/* Shutdown button */}
-      <motion.button
-        whileTap={{ scale: 0.96 }}
-        onClick={onShutdown}
-        style={{
-          width: '100%', padding: '9px 0', borderRadius: 10, cursor: 'pointer',
-          background: '#ff404015', border: '1px solid #ff404035',
+      <motion.button whileTap={{ scale: 0.96 }} onClick={onShutdown}
+        style={{ width: '100%', padding: '9px 0', borderRadius: 10, cursor: 'pointer',
+          background: '#ff404015', border: '1px solid #ff404035', marginTop: 2,
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          color: '#ff6060', fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 12,
-          transition: 'all 0.15s',
-          marginTop: 2,
-        }}
-      >
+          color: '#ff6060', fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 12 }}>
         <Power size={13} strokeWidth={2} />
         Shutdown Device
       </motion.button>
