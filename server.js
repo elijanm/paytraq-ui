@@ -94,6 +94,41 @@ async function nmcliConnect(ssid, password) {
 
 // ── iwlist + wpa_cli backend ──────────────────────────────────────────────────
 
+/**
+ * Detect the wireless interface name using multiple strategies.
+ * Tries iwconfig, then /sys/class/net, then falls back to wlan0.
+ */
+let _wlanIface = null
+async function wlanIface() {
+  if (_wlanIface) return _wlanIface
+
+  // Strategy 1: iwconfig — lines that don't say "no wireless extensions"
+  try {
+    const { stdout } = await execAsync('iwconfig 2>/dev/null', { timeout: 3000 })
+    const match = stdout.match(/^(\w+)\s+IEEE/m)
+    if (match) return (_wlanIface = match[1])
+  } catch {}
+
+  // Strategy 2: /sys/class/net/<iface>/wireless directory
+  try {
+    const { stdout } = await execAsync(
+      "for d in /sys/class/net/*/wireless; do echo ${d%/wireless}; done 2>/dev/null | xargs -I{} basename {} | head -1",
+      { timeout: 3000 }
+    )
+    const iface = stdout.trim()
+    if (iface && iface !== 'wireless' && iface !== '*') return (_wlanIface = iface)
+  } catch {}
+
+  // Strategy 3: ip link — look for wlan* or wlp* names
+  try {
+    const { stdout } = await execAsync('ip link show 2>/dev/null', { timeout: 3000 })
+    const match = stdout.match(/\d+:\s+(wl\w+):/m)
+    if (match) return (_wlanIface = match[1])
+  } catch {}
+
+  return (_wlanIface = 'wlan0')
+}
+
 function parseIwlist(stdout, connectedSsid) {
   const networks = []
   const seen     = new Set()
@@ -121,37 +156,42 @@ function parseIwlist(stdout, connectedSsid) {
 
 async function iwlistStatus() {
   try {
-    // iwgetid is the simplest way — falls back to iwconfig parsing
-    const { stdout } = await execAsync('iwgetid -r 2>/dev/null || iwconfig wlan0 2>/dev/null | grep -oP \'ESSID:"\\K[^"]+\'', { timeout: 4000 })
+    const iface = await wlanIface()
+    const { stdout } = await execAsync(
+      `iwgetid -r 2>/dev/null || iwconfig ${iface} 2>/dev/null | grep -oP 'ESSID:"\\K[^"]+'`,
+      { timeout: 4000 }
+    )
     return stdout.trim()
   } catch { return '' }
 }
 
 async function iwlistScan() {
+  const iface = await wlanIface()
   const connected = await iwlistStatus()
-  const { stdout } = await execAsync('sudo iwlist wlan0 scan 2>/dev/null', { timeout: 15000 })
+  // Show stderr so the caller gets a meaningful error if something goes wrong
+  const { stdout } = await execAsync(`sudo iwlist ${iface} scan`, { timeout: 15000 })
   return parseIwlist(stdout, connected)
 }
 
 async function wpaConnect(ssid, password) {
+  const iface = await wlanIface()
   const s = ssid.replace(/'/g, "'\\''")
   const p = (password ?? '').replace(/'/g, "'\\''")
 
-  // Add network, get id
-  const { stdout: idOut } = await execAsync(`wpa_cli -i wlan0 add_network`, { timeout: 5000 })
+  const { stdout: idOut } = await execAsync(`wpa_cli -i ${iface} add_network`, { timeout: 5000 })
   const netId = idOut.trim().split('\n').pop().trim()
 
-  await execAsync(`wpa_cli -i wlan0 set_network ${netId} ssid '"${s}"'`, { timeout: 5000 })
+  await execAsync(`wpa_cli -i ${iface} set_network ${netId} ssid '"${s}"'`, { timeout: 5000 })
 
   if (password) {
-    await execAsync(`wpa_cli -i wlan0 set_network ${netId} psk '"${p}"'`, { timeout: 5000 })
+    await execAsync(`wpa_cli -i ${iface} set_network ${netId} psk '"${p}"'`, { timeout: 5000 })
   } else {
-    await execAsync(`wpa_cli -i wlan0 set_network ${netId} key_mgmt NONE`, { timeout: 5000 })
+    await execAsync(`wpa_cli -i ${iface} set_network ${netId} key_mgmt NONE`, { timeout: 5000 })
   }
 
-  await execAsync(`wpa_cli -i wlan0 enable_network ${netId}`, { timeout: 5000 })
-  await execAsync(`wpa_cli -i wlan0 save_config`, { timeout: 5000 })
-  await execAsync(`wpa_cli -i wlan0 reconnect`, { timeout: 5000 })
+  await execAsync(`wpa_cli -i ${iface} enable_network ${netId}`, { timeout: 5000 })
+  await execAsync(`wpa_cli -i ${iface} save_config`, { timeout: 5000 })
+  await execAsync(`wpa_cli -i ${iface} reconnect`, { timeout: 5000 })
 }
 
 // ── INA219 battery reader (Suptronics X1203) ─────────────────────────────────
@@ -302,11 +342,22 @@ app.post('/wifi/disconnect', async (_req, res) => {
     if (!isMissing(e)) return res.json({ ok: false, error: e.message })
   }
   try {
-    await execAsync('wpa_cli -i wlan0 disconnect', { timeout: 8000 })
+    await execAsync(`wpa_cli -i ${await wlanIface()} disconnect`, { timeout: 8000 })
     res.json({ ok: true })
   } catch (e) {
     res.json({ ok: false, error: e.message })
   }
+})
+
+/** GET /debug — show detected interface + tool availability */
+app.get('/debug', async (_req, res) => {
+  const iface = await wlanIface()
+  const [iwcfg, iplink, sysnet] = await Promise.all([
+    execAsync('iwconfig 2>/dev/null').then(r => r.stdout.split('\n').slice(0,4).join(' ')).catch(e => e.message),
+    execAsync('ip link show 2>/dev/null').then(r => r.stdout.slice(0,200)).catch(e => e.message),
+    execAsync('ls /sys/class/net 2>/dev/null').then(r => r.stdout.trim()).catch(e => e.message),
+  ])
+  res.json({ detectedIface: iface, iwconfig: iwcfg, iplink: iplink.slice(0,300), sysnet })
 })
 
 /** GET /battery — real readings from Suptronics X1203 INA219 */
