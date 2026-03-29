@@ -14,7 +14,11 @@ import express from 'express'
 import cors from 'cors'
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import i2c from 'i2c-bus'
+// i2c-bus is a native module — only available on Linux/Pi.
+// We import it lazily inside the battery route so a missing binding
+// doesn't crash the whole server (WiFi still works on dev machines).
+let i2c = null
+try { i2c = (await import('i2c-bus')).default } catch { /* not on Pi */ }
 
 const execAsync = promisify(exec)
 const app  = express()
@@ -107,6 +111,7 @@ function voltageToPercent(v) {
 }
 
 async function readINA219() {
+  if (!i2c) throw new Error('i2c-bus not available on this platform')
   const bus = await i2c.openPromisified(1)
   try {
     // Write configuration
