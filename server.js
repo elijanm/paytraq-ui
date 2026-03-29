@@ -95,31 +95,29 @@ async function nmcliConnect(ssid, password) {
 // ── iwlist + wpa_cli backend ──────────────────────────────────────────────────
 
 /**
- * Detect the wireless interface name using multiple strategies.
- * Tries iwconfig, then /sys/class/net, then falls back to wlan0.
+ * Detect the wireless interface name.
+ * /proc/net/wireless is the most reliable source across all Pi kernel versions.
  */
 let _wlanIface = null
 async function wlanIface() {
   if (_wlanIface) return _wlanIface
 
-  // Strategy 1: iwconfig — lines that don't say "no wireless extensions"
+  // Strategy 1: /proc/net/wireless — lists active wireless interfaces on all Linux
+  try {
+    const { stdout } = await execAsync('cat /proc/net/wireless 2>/dev/null', { timeout: 2000 })
+    // Lines after the 2-line header look like: "  wlan0: 0000  70. ..."
+    const match = stdout.match(/^\s*(\w+):/m)
+    if (match) return (_wlanIface = match[1])
+  } catch {}
+
+  // Strategy 2: iwconfig output
   try {
     const { stdout } = await execAsync('iwconfig 2>/dev/null', { timeout: 3000 })
     const match = stdout.match(/^(\w+)\s+IEEE/m)
     if (match) return (_wlanIface = match[1])
   } catch {}
 
-  // Strategy 2: /sys/class/net/<iface>/wireless directory
-  try {
-    const { stdout } = await execAsync(
-      "for d in /sys/class/net/*/wireless; do echo ${d%/wireless}; done 2>/dev/null | xargs -I{} basename {} | head -1",
-      { timeout: 3000 }
-    )
-    const iface = stdout.trim()
-    if (iface && iface !== 'wireless' && iface !== '*') return (_wlanIface = iface)
-  } catch {}
-
-  // Strategy 3: ip link — look for wlan* or wlp* names
+  // Strategy 3: ip link — any wlan* or wlp* interface
   try {
     const { stdout } = await execAsync('ip link show 2>/dev/null', { timeout: 3000 })
     const match = stdout.match(/\d+:\s+(wl\w+):/m)
@@ -168,8 +166,15 @@ async function iwlistStatus() {
 async function iwlistScan() {
   const iface = await wlanIface()
   const connected = await iwlistStatus()
-  // Show stderr so the caller gets a meaningful error if something goes wrong
-  const { stdout } = await execAsync(`sudo iwlist ${iface} scan`, { timeout: 15000 })
+
+  // Try without sudo first — works on most Pi setups
+  try {
+    const { stdout } = await execAsync(`iwlist ${iface} scan 2>&1`, { timeout: 15000 })
+    if (/Scan completed|ESSID/i.test(stdout)) return parseIwlist(stdout, connected)
+  } catch {}
+
+  // Fall back to sudo — requires NOPASSWD rule in sudoers (see README)
+  const { stdout } = await execAsync(`sudo iwlist ${iface} scan 2>&1`, { timeout: 15000 })
   return parseIwlist(stdout, connected)
 }
 
@@ -384,6 +389,6 @@ app.get('/battery', async (_req, res) => {
 
 // ── start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`[PayTraq WiFi] sidecar running on http://127.0.0.1:${PORT}`)
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[PayTraq WiFi] sidecar running on http://0.0.0.0:${PORT}`)
 })
