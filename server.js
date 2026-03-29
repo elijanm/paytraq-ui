@@ -27,54 +27,143 @@ const PORT = 3001
 app.use(cors())
 app.use(express.json())
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── WiFi tool detection ───────────────────────────────────────────────────────
 
-function signalToBars(signal) {
+async function hasCmd(cmd) {
+  try { await execAsync(`which ${cmd}`); return true } catch { return false }
+}
+
+// Detect once at startup, cache result
+let _wifiTool = null  // 'nmcli' | 'iwlist' | null
+async function getWifiTool() {
+  if (_wifiTool !== null) return _wifiTool
+  if (await hasCmd('nmcli'))  return (_wifiTool = 'nmcli')
+  if (await hasCmd('iwlist')) return (_wifiTool = 'iwlist')
+  return (_wifiTool = 'none')
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+function signalToBars(signal) {   // signal = 0-100 quality %
   if (signal >= 75) return 4
   if (signal >= 50) return 3
   if (signal >= 25) return 2
   return 1
 }
 
-/**
- * Parse nmcli terse output:
- *   nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list
- * Each line: *:MyNet:85:WPA2  or  :OtherNet:62:--
- */
+function dBmToQuality(dbm) {      // iwlist gives dBm, convert to 0-100
+  return Math.min(100, Math.max(0, 2 * (dbm + 100)))
+}
+
+// ── nmcli backend ─────────────────────────────────────────────────────────────
+
 function parseNmcliList(stdout) {
   const networks = []
   const seen = new Set()
-
   for (const raw of stdout.split('\n')) {
     const line = raw.trim()
     if (!line) continue
-
-    // nmcli escapes colons as \:  — split on unescaped colons
     const parts = line.split(/(?<!\\):/)
     if (parts.length < 4) continue
-
     const inUse    = parts[0].trim() === '*'
     const ssid     = parts[1].replace(/\\:/g, ':').trim()
     const signal   = parseInt(parts[2]) || 0
     const security = parts[3].trim()
-
     if (!ssid || seen.has(ssid)) continue
     seen.add(ssid)
-
-    networks.push({
-      ssid,
-      signal,
-      bars:    signalToBars(signal),
-      secured: security !== '--' && security !== '',
-      connected: inUse,
-    })
+    networks.push({ ssid, signal, bars: signalToBars(signal),
+      secured: security !== '--' && security !== '', connected: inUse })
   }
-
-  // Sort: connected first, then by signal desc
   return networks.sort((a, b) => {
     if (a.connected !== b.connected) return a.connected ? -1 : 1
     return b.signal - a.signal
   })
+}
+
+async function nmcliScan() {
+  const { stdout } = await execAsync(
+    'nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list --rescan yes',
+    { timeout: 15000 }
+  )
+  return parseNmcliList(stdout)
+}
+
+async function nmcliStatus() {
+  const { stdout } = await execAsync(
+    "nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | head -1",
+    { timeout: 5000 }
+  )
+  return stdout.trim().split(':')[1]?.replace(/\\:/g, ':') ?? ''
+}
+
+async function nmcliConnect(ssid, password) {
+  const s = ssid.replace(/"/g, '\\"')
+  const cmd = password
+    ? `nmcli dev wifi connect "${s}" password "${password.replace(/"/g, '\\"')}"`
+    : `nmcli dev wifi connect "${s}"`
+  await execAsync(cmd, { timeout: 20000 })
+}
+
+// ── iwlist + wpa_cli backend ──────────────────────────────────────────────────
+
+function parseIwlist(stdout, connectedSsid) {
+  const networks = []
+  const seen     = new Set()
+  const cells    = stdout.split(/Cell \d+ - /)
+
+  for (const cell of cells) {
+    const ssidM  = cell.match(/ESSID:"([^"]*)"/)
+    const sigM   = cell.match(/Signal level=(-?\d+) dBm/)
+    const encM   = cell.match(/Encryption key:(on|off)/)
+    if (!ssidM || !sigM) continue
+    const ssid = ssidM[1].trim()
+    if (!ssid || seen.has(ssid)) continue
+    seen.add(ssid)
+    const dbm     = parseInt(sigM[1])
+    const signal  = dBmToQuality(dbm)
+    const secured = encM?.[1] === 'on'
+    networks.push({ ssid, signal, bars: signalToBars(signal),
+      secured, connected: ssid === connectedSsid })
+  }
+  return networks.sort((a, b) => {
+    if (a.connected !== b.connected) return a.connected ? -1 : 1
+    return b.signal - a.signal
+  })
+}
+
+async function iwlistStatus() {
+  try {
+    // iwgetid is the simplest way — falls back to iwconfig parsing
+    const { stdout } = await execAsync('iwgetid -r 2>/dev/null || iwconfig wlan0 2>/dev/null | grep -oP \'ESSID:"\\K[^"]+\'', { timeout: 4000 })
+    return stdout.trim()
+  } catch { return '' }
+}
+
+async function iwlistScan() {
+  const connected = await iwlistStatus()
+  const { stdout } = await execAsync('sudo iwlist wlan0 scan 2>/dev/null', { timeout: 15000 })
+  return parseIwlist(stdout, connected)
+}
+
+async function wpaConnect(ssid, password) {
+  const s = ssid.replace(/'/g, "'\\''")
+  const p = (password ?? '').replace(/'/g, "'\\''")
+
+  // Add network, get id
+  const { stdout: idOut } = await execAsync(`wpa_cli -i wlan0 add_network`, { timeout: 5000 })
+  const netId = idOut.trim().split('\n').pop().trim()
+
+  await execAsync(`wpa_cli -i wlan0 set_network ${netId} ssid '"${s}"'`, { timeout: 5000 })
+
+  if (password) {
+    await execAsync(`wpa_cli -i wlan0 set_network ${netId} psk '"${p}"'`, { timeout: 5000 })
+  } else {
+    await execAsync(`wpa_cli -i wlan0 set_network ${netId} key_mgmt NONE`, { timeout: 5000 })
+  }
+
+  await execAsync(`wpa_cli -i wlan0 enable_network ${netId}`, { timeout: 5000 })
+  await execAsync(`wpa_cli -i wlan0 save_config`, { timeout: 5000 })
+  await execAsync(`wpa_cli -i wlan0 reconnect`, { timeout: 5000 })
 }
 
 // ── INA219 battery reader (Suptronics X1203) ─────────────────────────────────
@@ -166,27 +255,25 @@ let _batteryCacheAt = 0
 
 // ── routes ───────────────────────────────────────────────────────────────────
 
-/** GET /wifi/scan — list visible networks */
-app.get('/wifi/scan', async (req, res) => {
+/** GET /wifi/scan */
+app.get('/wifi/scan', async (_req, res) => {
   try {
-    const { stdout } = await execAsync(
-      'nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list --rescan yes',
-      { timeout: 15000 }
-    )
-    res.json({ ok: true, networks: parseNmcliList(stdout) })
+    const tool = await getWifiTool()
+    if (tool === 'nmcli')  return res.json({ ok: true, tool, networks: await nmcliScan() })
+    if (tool === 'iwlist') return res.json({ ok: true, tool, networks: await iwlistScan() })
+    res.status(500).json({ ok: false, error: 'No WiFi tool found. Install network-manager (nmcli) or wireless-tools (iwlist).' })
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
 
-/** GET /wifi/status — currently connected SSID */
-app.get('/wifi/status', async (req, res) => {
+/** GET /wifi/status */
+app.get('/wifi/status', async (_req, res) => {
   try {
-    const { stdout } = await execAsync(
-      "nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | head -1",
-      { timeout: 5000 }
-    )
-    const ssid = stdout.trim().split(':')[1]?.replace(/\\:/g, ':') ?? ''
+    const tool = await getWifiTool()
+    const ssid = tool === 'nmcli'  ? await nmcliStatus()
+               : tool === 'iwlist' ? await iwlistStatus()
+               : ''
     res.json({ ok: true, ssid })
   } catch {
     res.json({ ok: true, ssid: '' })
@@ -197,25 +284,23 @@ app.get('/wifi/status', async (req, res) => {
 app.post('/wifi/connect', async (req, res) => {
   const { ssid, password } = req.body ?? {}
   if (!ssid) return res.status(400).json({ ok: false, error: 'ssid required' })
-
-  const safe = ssid.replace(/"/g, '\\"')
-  const cmd  = password
-    ? `nmcli dev wifi connect "${safe}" password "${password.replace(/"/g, '\\"')}"`
-    : `nmcli dev wifi connect "${safe}"`
-
   try {
-    await execAsync(cmd, { timeout: 20000 })
+    const tool = await getWifiTool()
+    if (tool === 'nmcli')  await nmcliConnect(ssid, password)
+    else if (tool === 'iwlist') await wpaConnect(ssid, password)
+    else return res.json({ ok: false, error: 'No WiFi tool available' })
     res.json({ ok: true })
   } catch (err) {
-    const msg = err.stderr || err.message || 'Connection failed'
-    res.status(200).json({ ok: false, error: msg })
+    res.status(200).json({ ok: false, error: err.stderr ?? err.message })
   }
 })
 
-/** GET /wifi/disconnect */
+/** POST /wifi/disconnect */
 app.post('/wifi/disconnect', async (_req, res) => {
   try {
-    await execAsync('nmcli dev disconnect wlan0', { timeout: 8000 })
+    const tool = await getWifiTool()
+    if (tool === 'nmcli') await execAsync('nmcli dev disconnect wlan0', { timeout: 8000 })
+    else                  await execAsync('wpa_cli -i wlan0 disconnect', { timeout: 8000 })
     res.json({ ok: true })
   } catch (err) {
     res.status(200).json({ ok: false, error: err.message })
