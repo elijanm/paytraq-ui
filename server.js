@@ -27,20 +27,8 @@ const PORT = 3001
 app.use(cors())
 app.use(express.json())
 
-// ── WiFi tool detection ───────────────────────────────────────────────────────
-
-async function hasCmd(cmd) {
-  try { await execAsync(`which ${cmd}`); return true } catch { return false }
-}
-
-// Detect once at startup, cache result
-let _wifiTool = null  // 'nmcli' | 'iwlist' | null
-async function getWifiTool() {
-  if (_wifiTool !== null) return _wifiTool
-  if (await hasCmd('nmcli'))  return (_wifiTool = 'nmcli')
-  if (await hasCmd('iwlist')) return (_wifiTool = 'iwlist')
-  return (_wifiTool = 'none')
-}
+// No pre-detection — each WiFi helper tries nmcli first, falls back to
+// iwlist/wpa_cli on any "command not found" error.
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -255,26 +243,33 @@ let _batteryCacheAt = 0
 
 // ── routes ───────────────────────────────────────────────────────────────────
 
+const isMissing = (e) => /not found|No such file|ENOENT/i.test(e.message)
+
 /** GET /wifi/scan */
 app.get('/wifi/scan', async (_req, res) => {
   try {
-    const tool = await getWifiTool()
-    if (tool === 'nmcli')  return res.json({ ok: true, tool, networks: await nmcliScan() })
-    if (tool === 'iwlist') return res.json({ ok: true, tool, networks: await iwlistScan() })
-    res.status(500).json({ ok: false, error: 'No WiFi tool found. Install network-manager (nmcli) or wireless-tools (iwlist).' })
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message })
+    return res.json({ ok: true, tool: 'nmcli', networks: await nmcliScan() })
+  } catch (e1) {
+    if (!isMissing(e1)) return res.status(500).json({ ok: false, error: e1.message })
+  }
+  try {
+    return res.json({ ok: true, tool: 'iwlist', networks: await iwlistScan() })
+  } catch (e2) {
+    res.status(500).json({ ok: false, error: isMissing(e2)
+      ? 'No WiFi tool found. Run: sudo apt install wireless-tools'
+      : e2.message })
   }
 })
 
 /** GET /wifi/status */
 app.get('/wifi/status', async (_req, res) => {
   try {
-    const tool = await getWifiTool()
-    const ssid = tool === 'nmcli'  ? await nmcliStatus()
-               : tool === 'iwlist' ? await iwlistStatus()
-               : ''
-    res.json({ ok: true, ssid })
+    return res.json({ ok: true, ssid: await nmcliStatus() })
+  } catch (e) {
+    if (!isMissing(e)) return res.json({ ok: true, ssid: '' })
+  }
+  try {
+    return res.json({ ok: true, ssid: await iwlistStatus() })
   } catch {
     res.json({ ok: true, ssid: '' })
   }
@@ -285,25 +280,32 @@ app.post('/wifi/connect', async (req, res) => {
   const { ssid, password } = req.body ?? {}
   if (!ssid) return res.status(400).json({ ok: false, error: 'ssid required' })
   try {
-    const tool = await getWifiTool()
-    if (tool === 'nmcli')  await nmcliConnect(ssid, password)
-    else if (tool === 'iwlist') await wpaConnect(ssid, password)
-    else return res.json({ ok: false, error: 'No WiFi tool available' })
-    res.json({ ok: true })
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.stderr ?? err.message })
+    await nmcliConnect(ssid, password)
+    return res.json({ ok: true })
+  } catch (e1) {
+    if (!isMissing(e1)) return res.json({ ok: false, error: e1.stderr ?? e1.message })
+  }
+  try {
+    await wpaConnect(ssid, password)
+    return res.json({ ok: true })
+  } catch (e2) {
+    res.json({ ok: false, error: e2.stderr ?? e2.message })
   }
 })
 
 /** POST /wifi/disconnect */
 app.post('/wifi/disconnect', async (_req, res) => {
   try {
-    const tool = await getWifiTool()
-    if (tool === 'nmcli') await execAsync('nmcli dev disconnect wlan0', { timeout: 8000 })
-    else                  await execAsync('wpa_cli -i wlan0 disconnect', { timeout: 8000 })
+    await execAsync('nmcli dev disconnect wlan0', { timeout: 8000 })
+    return res.json({ ok: true })
+  } catch (e) {
+    if (!isMissing(e)) return res.json({ ok: false, error: e.message })
+  }
+  try {
+    await execAsync('wpa_cli -i wlan0 disconnect', { timeout: 8000 })
     res.json({ ok: true })
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.message })
+  } catch (e) {
+    res.json({ ok: false, error: e.message })
   }
 })
 

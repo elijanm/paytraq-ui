@@ -424,48 +424,117 @@ function WifiConnectOverlay({ network, apiAvailable, onBack, onConnected }: Wifi
 
 // ── WiFi tab — network list ───────────────────────────────────────────────────
 function WifiTab({ online }: { online: boolean }) {
-  const [networks, setNetworks]       = useState<Network[]>(MOCK_NETWORKS.map(n => ({ ...n })))
+  const [networks, setNetworks]           = useState<Network[]>(MOCK_NETWORKS.map(n => ({ ...n })))
   const [connectedSsid, setConnectedSsid] = useState(online ? MOCK_NETWORKS[0].ssid : '')
-  const [selected, setSelected]       = useState<Network | null>(null)
-  const [scanning, setScanning]       = useState(false)
-  const [apiAvailable, setApiAvailable] = useState(false)
+  const [selected, setSelected]           = useState<Network | null>(null)
+  const [scanning, setScanning]           = useState(false)
+  const [apiAvailable, setApiAvailable]   = useState(false)
+  const [scanError, setScanError]         = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated]     = useState<Date | null>(null)
 
+  // Full scan — called on mount and Scan button
   const fetchNetworks = async () => {
     setScanning(true)
+    setScanError(null)
     try {
-      const res  = await fetch(`${WIFI_API}/wifi/scan`, { signal: AbortSignal.timeout(12000) })
+      const res  = await fetch(`${WIFI_API}/wifi/scan`, { signal: AbortSignal.timeout(18000) })
       const data = await res.json()
       if (data.ok && data.networks.length > 0) {
         setNetworks(data.networks)
         const conn = data.networks.find((n: Network) => n.connected)
-        if (conn) setConnectedSsid(conn.ssid)
+        setConnectedSsid(conn?.ssid ?? '')
         setApiAvailable(true)
+        setLastUpdated(new Date())
+      } else if (!data.ok) {
+        setScanError(data.error ?? 'Scan failed')
+        setApiAvailable(false)
       }
     } catch {
-      // sidecar not available — keep mock data, simulation mode
+      setApiAvailable(false)
     }
     setScanning(false)
   }
 
-  useEffect(() => { fetchNetworks() }, [])
+  // Lightweight status poll — just refreshes which SSID is connected
+  const pollStatus = async () => {
+    if (!apiAvailable) return
+    try {
+      const res  = await fetch(`${WIFI_API}/wifi/status`, { signal: AbortSignal.timeout(4000) })
+      const data = await res.json()
+      if (data.ok) {
+        setConnectedSsid(data.ssid ?? '')
+        setLastUpdated(new Date())
+      }
+    } catch {}
+  }
 
-  const displayNetworks = networks.map(n => ({ ...n, connected: n.connected || n.ssid === connectedSsid }))
+  useEffect(() => {
+    fetchNetworks()
+    const id = setInterval(pollStatus, 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const displayNetworks = networks.map(n => ({
+    ...n,
+    connected: apiAvailable ? n.connected : n.ssid === connectedSsid,
+  }))
+
+  const connNet = displayNetworks.find(n => n.connected)
 
   return (
     <>
       <AnimatePresence mode="wait">
         <motion.div key="list" initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: 0.18 }}>
           <div style={{ padding: '8px 10px 10px' }}>
-            {/* Scan header */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Available networks</span>
-                {apiAvailable && (
-                  <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, color: '#00e5a060', padding: '1px 5px', borderRadius: 4, background: '#00e5a010', border: '1px solid #00e5a020' }}>LIVE</span>
+
+            {/* Connected strip */}
+            <div style={{ marginBottom: 8, padding: '7px 10px', borderRadius: 10,
+              background: connectedSsid ? '#00e5a010' : 'var(--surface-2)',
+              border: `1px solid ${connectedSsid ? '#00e5a030' : 'var(--border)'}`,
+              display: 'flex', alignItems: 'center', gap: 8 }}>
+              {connectedSsid
+                ? <Wifi size={13} color="#00e5a0" strokeWidth={1.8} />
+                : <WifiOff size={13} color="var(--text-muted)" strokeWidth={1.8} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11,
+                  color: connectedSsid ? '#00e5a0' : 'var(--text-muted)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {connectedSsid || 'Not connected'}
+                </div>
+                {lastUpdated && (
+                  <div style={{ fontFamily: 'var(--font-body)', fontSize: 8, color: 'var(--text-muted)', marginTop: 1 }}>
+                    Updated {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
                 )}
               </div>
+              {connNet && <SignalBars bars={connNet.bars} color="#00e5a0" />}
+              {apiAvailable && (
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 7, color: '#00e5a060',
+                  padding: '1px 4px', borderRadius: 3, background: '#00e5a010',
+                  border: '1px solid #00e5a020', flexShrink: 0 }}>LIVE</span>
+              )}
+            </div>
+
+            {/* Scan error */}
+            {scanError && (
+              <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 8,
+                background: '#ff606010', border: '1px solid #ff606030' }}>
+                <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: '#ff6060' }}>{scanError}</div>
+                {/wireless-tools|iwlist/i.test(scanError) && (
+                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 8, color: 'var(--text-muted)', marginTop: 2 }}>
+                    Run: sudo apt install wireless-tools
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Scan header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {scanning ? 'Scanning…' : `Networks (${displayNetworks.length})`}
+              </span>
               <motion.button whileTap={{ scale: 0.88 }} onClick={fetchNetworks}
-                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: scanning ? '#00e5a0' : 'var(--text-muted)' }}>
                 <motion.div animate={scanning ? { rotate: 360 } : {}} transition={{ duration: 0.9, repeat: scanning ? Infinity : 0, ease: 'linear' }}>
                   <RefreshCw size={10} strokeWidth={2} />
                 </motion.div>
