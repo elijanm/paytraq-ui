@@ -740,10 +740,9 @@ function BatteryTab({ onShutdown }: { onShutdown: () => void }) {
 
       {/* Error / no-data hint */}
       {pct === null && (
-        <div style={{ textAlign: 'center', padding: '4px 0' }}>
-          {hwError && <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: '#ff6060', marginBottom: 3 }}>{hwError}</div>}
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)' }}>
-            Enable I2C on Pi: <span style={{ fontFamily: 'var(--font-display)', color: 'var(--text)' }}>raspi-config → Interfaces → I2C</span>
+        <div style={{ padding: '6px 10px', borderRadius: 8, background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            {hwError ?? 'Battery hardware interface not detected.'}
           </div>
         </div>
       )}

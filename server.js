@@ -365,25 +365,39 @@ app.get('/debug', async (_req, res) => {
   res.json({ detectedIface: iface, iwconfig: iwcfg, iplink: iplink.slice(0,300), sysnet })
 })
 
-/** GET /battery — real readings from Suptronics X1203 INA219 */
+/** GET /battery — real readings from Suptronics X1203
+ *  Tries INA219 via I2C first. If no I2C devices found, reads GPIO pins instead.
+ *  Set BATTERY_GPIO_PIN below once you identify the pin from `gpio readall`.
+ */
+const BATTERY_GPIO_PIN = null  // e.g. 4 — set after running: gpio readall
+
 app.get('/battery', async (_req, res) => {
-  const now = Date.now()
-  // Return cache if < 10 s old (avoids hammering I2C on repeated polls)
-  if (_batteryCache && now - _batteryCacheAt < 10_000) {
-    return res.json(_batteryCache)
+  // No I2C available — try GPIO pin if configured
+  if (!i2c) {
+    if (BATTERY_GPIO_PIN !== null) {
+      try {
+        const { stdout } = await execAsync(`gpio read ${BATTERY_GPIO_PIN}`, { timeout: 2000 })
+        const onBattery = stdout.trim() === '1'
+        return res.json({ ok: true, source: 'gpio', charging: !onBattery,
+          percent: null, voltage: null,
+          note: 'GPIO pin only — percent/voltage unavailable without I2C' })
+      } catch (e) {
+        return res.json({ ok: false, error: e.message })
+      }
+    }
+    return res.json({ ok: false, source: 'none',
+      error: 'X1203 has no I2C interface. Set BATTERY_GPIO_PIN in server.js once you identify the signal pin (run: gpio readall).' })
   }
+
+  const now = Date.now()
+  if (_batteryCache && now - _batteryCacheAt < 10_000) return res.json(_batteryCache)
   try {
     const data = await readINA219()
     _batteryCache   = data
     _batteryCacheAt = now
     res.json(data)
   } catch (err) {
-    // I2C not available (dev machine) or wrong address — return descriptive error
-    res.status(200).json({
-      ok: false,
-      error: err.message,
-      hint: 'Check I2C enabled (raspi-config) and INA219_ADDR matches i2cdetect output',
-    })
+    res.status(200).json({ ok: false, error: err.message })
   }
 })
 
