@@ -184,7 +184,7 @@ function ShutdownScreen() {
   )
 }
 
-const WIFI_API = 'http://fullpageos:3001'
+const WIFI_API = 'http://fullpageos.local:3001'
 
 // ── Network type ──────────────────────────────────────────────────────────────
 interface Network { ssid: string; bars: number; signal?: number; secured: boolean; connected?: boolean }
